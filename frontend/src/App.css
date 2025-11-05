@@ -294,3 +294,69 @@ body {
     page-break-before: always;
   }
 }
+
+/* High-Contrast Accessibility Mode */
+body.high-contrast {
+  background: #111 !important;
+  color: #ffe600 !important;
+}
+body.high-contrast .bg-white,
+body.high-contrast .bg-gray-50,
+body.high-contrast .bg-gradient-to-r,
+body.high-contrast .bg-gradient-to-br,
+body.high-contrast .rounded-lg,
+body.high-contrast .rounded-2xl,
+body.high-contrast .card,
+body.high-contrast .p-4,
+body.high-contrast .p-6 {
+  background: #000 !important;
+  color: #ffe600 !important;
+  box-shadow: none !important;
+  border-color: #ffe600 !important;
+}
+body.high-contrast input,
+body.high-contrast select,
+body.high-contrast button {
+  background: #000 !important;
+  color: #ffe600 !important;
+  border: 2px solid #ffe600 !important;
+}
+body.high-contrast input:focus,
+body.high-contrast select:focus,
+body.high-contrast button:focus {
+  outline: 3px solid #ffe600 !important;
+  box-shadow: 0 0 0 3px #ffe60066 !important;
+}
+body.high-contrast a,
+body.high-contrast a:visited {
+  color: #fff200 !important;
+  background: #181818;
+  text-decoration: underline wavy #ffe600;
+}
+body.high-contrast .text-blue-600,
+body.high-contrast .text-red-500,
+body.high-contrast .text-green-700,
+body.high-contrast .text-gray-700,
+body.high-contrast .text-gray-900,
+body.high-contrast .text-white,
+body.high-contrast [class*='text-'] {
+  color: #ffe600 !important;
+}
+body.high-contrast .border-blue-500,
+body.high-contrast .border-red-200,
+body.high-contrast .border-gray-200 {
+  border-color: #ffe600 !important;
+}
+body.high-contrast .bg-blue-600,
+body.high-contrast .bg-purple-600,
+body.high-contrast .bg-red-500,
+body.high-contrast .bg-green-500,
+body.high-contrast [class*='bg-'] {
+  background: #000 !important;
+  color: #ffe600 !important;
+}
+body.high-contrast .shadow-lg,
+body.high-contrast .shadow,
+body.high-contrast .shadow-custom {
+  box-shadow: none !important;
+}

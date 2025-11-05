@@ -1,5 +1,11 @@
 # KB22 Heart Disease Prediction Flask Backend - Enhanced with Multiple ML Models
 # Save this as: app.py in your backend folder
+import os
+from dotenv import load_dotenv
+load_dotenv()
+from flask_mail import Mail, Message
+from fpdf import FPDF
+
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -27,6 +33,15 @@ warnings.filterwarnings('ignore')
 
 app = Flask(__name__)
 CORS(app, origins=['http://localhost:3000'])  # Allow React app
+
+# === Configure Flask-Mail with Gmail ===
+app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+app.config['MAIL_PORT'] = 587
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME')
+app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
+app.config['MAIL_DEFAULT_SENDER'] = app.config['MAIL_USERNAME']
+mail = Mail(app)
 
 # Global variables
 best_model = None
@@ -341,7 +356,54 @@ def validate_input(data):
                 raise ValueError(f"{name} must be between {min_val} and {max_val}")
         except (ValueError, TypeError):
             raise ValueError(f"{name} must be a valid number")
+# === Helper: Generate PDF Report as Bytes ===
+def create_pdf_report(formData, prediction, date_str):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=16)
+    pdf.cell(0, 12, "Heart Disease Prediction Report", ln=1)
+    pdf.set_font("Arial", size=11)
+    pdf.cell(0, 10, f"Date: {date_str}", ln=1)
+    pdf.cell(0, 10, f"Age: {formData.get('age', '')}", ln=1)
+    pdf.cell(0, 10, f"Sex: {'Male' if formData.get('sex')=='1' else 'Female'}", ln=1)
+    pdf.cell(0, 10, f"Model: {prediction.get('model', 'N/A')}", ln=1)
+    pdf.cell(0, 10, f"Risk Score: {round(float(prediction.get('probability', 0))*100, 1)}% ({prediction.get('risk_level', 'N/A')})", ln=1)
+    pdf.cell(0, 10, f"Result: {'POSITIVE' if prediction.get('prediction')==1 else 'NEGATIVE'}", ln=1)
+    pdf.cell(0, 10, "", ln=1)
+    pdf.set_font("Arial", style="B", size=12)
+    pdf.cell(0, 10, "Recommendations:", ln=1)
+    pdf.set_font("Arial", size=11)
+    recommendation = prediction.get('recommendation', 'N/A')
+    for line in recommendation.split('\n'):
+        pdf.multi_cell(0, 8, line)
+    # Disclaimer
+    pdf.set_y(-30)
+    pdf.set_font("Arial", size=9)
+    pdf.set_text_color(120,120,120)
+    pdf.multi_cell(0, 7, "This is an auto-generated report for informational purposes only. Consult a qualified healthcare provider for diagnosis and medical decisions.", align='C')
+    # Output report as bytes
+    pdf_bytes = pdf.output(dest='S').encode('latin1')
+    return pdf_bytes
 
+# === Email Report Endpoint ===
+@app.route('/api/report/email', methods=['POST'])
+def email_report():
+    try:
+        data = request.json
+        email = data['email']
+        formData = data['formData']
+        prediction = data['prediction']
+        date_str = data.get('date', '')
+        pdf_data = create_pdf_report(formData, prediction, date_str)
+        msg = Message(subject="Your Heart Disease Prediction Report", recipients=[email])
+        msg.body = "Attached is your heart disease prediction result report.\n\nThank you for using our system!"
+        msg.attach("report.pdf", "application/pdf", pdf_data)
+        mail.send(msg)
+        return jsonify({"success": True})
+    except Exception as e:
+        print("Email send error:", str(e))
+        return jsonify({"success": False, "error": str(e)}), 500
+        
 @app.route('/')
 def home():
     """Health check"""
@@ -433,6 +495,54 @@ def model_comparison():
         'total_models_tested': len(comparison_data)
     })
 
+@app.route('/api/dataset/statistics')
+def dataset_statistics():
+    """Get dataset statistics for visualization"""
+    try:
+        # Load dataset
+        df = load_uci_dataset()
+        
+        # Calculate statistics for each feature
+        numeric_features = ['age', 'trestbps', 'chol', 'thalach', 'oldpeak']
+        categorical_features = ['sex', 'cp', 'fbs', 'restecg', 'exang', 'slope', 'ca', 'thal']
+        
+        statistics = {}
+        
+        # Calculate statistics for numeric features
+        for feature in numeric_features:
+            if feature in df.columns:
+                stats = {
+                    'mean': float(df[feature].mean()),
+                    'median': float(df[feature].median()),
+                    'std': float(df[feature].std()),
+                    'min': float(df[feature].min()),
+                    'max': float(df[feature].max()),
+                    'q25': float(df[feature].quantile(0.25)),
+                    'q75': float(df[feature].quantile(0.75))
+                }
+                statistics[feature] = stats
+        
+        # Calculate statistics for categorical features
+        for feature in categorical_features:
+            if feature in df.columns:
+                stats = {
+                    'mean': float(df[feature].mean()),
+                    'median': float(df[feature].median()),
+                    'min': float(df[feature].min()),
+                    'max': float(df[feature].max()),
+                    'mode': float(df[feature].mode()[0]) if len(df[feature].mode()) > 0 else float(df[feature].median())
+                }
+                statistics[feature] = stats
+        
+        return jsonify({
+            'statistics': statistics,
+            'total_samples': int(len(df)),
+            'features': feature_names
+        })
+    except Exception as e:
+        print(f"Error getting dataset statistics: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/predict/kb22', methods=['POST'])
 def predict():
     """Main prediction endpoint using best model"""
@@ -508,6 +618,8 @@ def predict():
             'error': f'Prediction failed: {str(e)}',
             'status': 'error'
         }), 500
+
+
 
 def get_recommendation(prediction, probability):
     """Generate recommendations based on prediction"""

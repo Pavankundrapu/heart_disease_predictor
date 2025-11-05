@@ -15,9 +15,16 @@ import {
   Trophy,
   Target,
   Clock,
+  Mail,
 } from "lucide-react";
 import LoadingSpinner from './components/LoadingSpinner';
+import RiskGauge from './components/RiskGauge';
+import LifestyleTracker from './components/LifestyleTracker';
+import EmailReportModal from './components/EmailReportModal';
+import PatientDataComparison from './components/PatientDataComparison';
 import "./App.css";
+import { jsPDF } from 'jspdf';
+import emailjs from 'emailjs-com';
 
 function App() {
   const [formData, setFormData] = useState({
@@ -44,11 +51,29 @@ function App() {
   const [modelInfo, setModelInfo] = useState(null);
   const [modelComparison, setModelComparison] = useState(null);
   const [showComparison, setShowComparison] = useState(false);
+  const [emailModal, setEmailModal] = useState(false);
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailError, setEmailError] = useState('');
+  const [emailSent, setEmailSent] = useState(false);
+  const [datasetStats, setDatasetStats] = useState(null);
 
   // Check backend connection on component mount
   useEffect(() => {
     checkBackendConnection();
+    fetchDatasetStatistics();
   }, []);
+
+  const fetchDatasetStatistics = async () => {
+    try {
+      const response = await fetch("/api/dataset/statistics");
+      if (response.ok) {
+        const data = await response.json();
+        setDatasetStats(data);
+      }
+    } catch (error) {
+      console.error("Error fetching dataset statistics:", error);
+    }
+  };
 
   const checkBackendConnection = async () => {
     try {
@@ -267,6 +292,72 @@ function App() {
       thal: "3",
     });
     setError(null);
+  };
+
+  const handlePdfDownload = () => {
+    if (!prediction) return;
+    const doc = new jsPDF();
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(18);
+    doc.text('Heart Disease Prediction Report', 10, 18);
+    doc.setFontSize(13);
+    doc.setFont('helvetica','normal');
+    const yStart = 30;
+    doc.text(`Date: ${new Date().toLocaleString()}`, 10, yStart);
+    doc.text(`Patient Age: ${formData.age}`, 10, yStart+10);
+    doc.text(`Sex: ${formData.sex==='1'?'Male':'Female'}`, 10, yStart+20);
+    // Main results
+    doc.setFontSize(14); doc.setTextColor(88,64,220);
+    doc.text(`Risk Score: ${(prediction.probability*100).toFixed(1)}% [${prediction.risk_level}]`, 10, yStart+32);
+    doc.setTextColor(0,0,0);
+    doc.setFontSize(12);
+    doc.text(`Result: ${prediction.prediction===1? 'POSITIVE (Heart Disease Detected)':'NEGATIVE (No Heart Disease)'}`, 10, yStart+42);
+    doc.text(`Model Used: ${prediction.model}`, 10, yStart+52);
+    doc.text(`Accuracy: ${prediction.accuracy}`, 10, yStart+62);
+    doc.setFont('helvetica','bold');
+    doc.text('Recommendations:', 10, yStart+76);
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(11);
+    let recLines = doc.splitTextToSize(prediction.recommendation || '',170);
+    doc.text(recLines, 10, yStart+84);
+    doc.setFontSize(9);
+    doc.setTextColor(160,160,160);
+    doc.text('Disclaimer: This report is informational and does not replace medical advice.', 10, 280);
+    doc.save(`heart-disease-report-${Date.now()}.pdf`);
+  };
+
+  const EMAILJS_SERVICE_ID = import.meta.env.VITE_EMAILJS_SERVICE_ID;
+  const EMAILJS_TEMPLATE_ID = import.meta.env.VITE_EMAILJS_TEMPLATE_ID;
+  const EMAILJS_USER_ID = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
+
+  const getSummaryText = () => `KB22 Heart Disease Report\n\nDate: ${new Date().toLocaleString()}\nPatient Age: ${formData.age}\nSex: ${formData.sex==='1'?'Male':'Female'}\nRisk Score: ${(prediction.probability*100).toFixed(1)}% [${prediction.risk_level}]\nResult: ${prediction.prediction===1? 'POSITIVE (Heart Disease Detected)':'NEGATIVE (No Heart Disease)'}\nModel Used: ${prediction.model}\nAccuracy: ${prediction.accuracy}\n\nRecommendations:\n${prediction.recommendation}`;
+
+  const handleSendEmail = async (recipient) => {
+    setEmailError(''); setEmailSending(true);
+    try {
+      if (!EMAILJS_SERVICE_ID || !EMAILJS_TEMPLATE_ID || !EMAILJS_USER_ID) {
+        throw new Error('Email service is not configured. Please set VITE_EMAILJS_SERVICE_ID, VITE_EMAILJS_TEMPLATE_ID, and VITE_EMAILJS_PUBLIC_KEY in your .env');
+      }
+      const params = {
+        to_email: recipient,
+        report_summary: getSummaryText(),
+        patient_age: formData.age,
+        risk_percent: (prediction.probability*100).toFixed(1),
+        result: prediction.prediction===1? 'POSITIVE':'NEGATIVE',
+        recommendations: prediction.recommendation
+      };
+      const result = await emailjs.send(
+        EMAILJS_SERVICE_ID,
+        EMAILJS_TEMPLATE_ID,
+        params,
+        EMAILJS_USER_ID
+      );
+      setEmailSending(false); setEmailSent(true);
+      setTimeout(()=>{setEmailModal(false); setEmailSent(false);}, 2200);
+    } catch (e) {
+      setEmailError('Could not send email: ' + (e.text || e.message));
+      setEmailSending(false);
+    }
   };
 
   return (
@@ -494,6 +585,7 @@ function App() {
                       min="1"
                       max="120"
                       required
+                      title="Age of the patient in years. Higher age increases risk."
                     />
                   </div>
 
@@ -507,6 +599,7 @@ function App() {
                       onChange={handleInputChange}
                       className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                       required
+                      title="Patient's biological sex: 0 = Female, 1 = Male. Risk profile differs by sex."
                     >
                       <option value="">Select</option>
                       <option value="1">Male</option>
@@ -524,6 +617,7 @@ function App() {
                       onChange={handleInputChange}
                       className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                       required
+                      title="Chest pain type: 0 = Typical Angina, 1 = Atypical, 2 = Non-anginal, 3 = Asymptomatic."
                     >
                       <option value="">Select type</option>
                       <option value="0">Typical Angina</option>
@@ -547,6 +641,7 @@ function App() {
                       min="50"
                       max="300"
                       required
+                      title="Resting blood pressure (mm Hg). High values indicate hypertension risk."
                     />
                   </div>
 
@@ -564,6 +659,7 @@ function App() {
                       min="100"
                       max="600"
                       required
+                      title="Serum cholesterol (mg/dl). Elevated cholesterol is a major risk factor."
                     />
                   </div>
                 </div>
@@ -585,6 +681,7 @@ function App() {
                       onChange={handleInputChange}
                       className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                       required
+                      title="Fasting blood sugar > 120 mg/dl: 1 = Yes, 0 = No. High fasting sugar increases risk."
                     >
                       <option value="">Select</option>
                       <option value="1">True</option>
@@ -602,6 +699,7 @@ function App() {
                       onChange={handleInputChange}
                       className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                       required
+                      title="Resting ECG results: 0 = Normal, 1 = ST-T abnormality, 2 = Left ventricular hypertrophy."
                     >
                       <option value="">Select result</option>
                       <option value="0">Normal</option>
@@ -624,6 +722,7 @@ function App() {
                       min="50"
                       max="220"
                       required
+                      title="Maximum heart rate achieved (bpm). Low values may indicate heart issues."
                     />
                   </div>
 
@@ -637,6 +736,7 @@ function App() {
                       onChange={handleInputChange}
                       className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                       required
+                      title="Exercise induced angina: 1 = Yes, 0 = No. Indicates chest pain on exertion."
                     >
                       <option value="">Select</option>
                       <option value="1">Yes</option>
@@ -659,6 +759,7 @@ function App() {
                       min="0"
                       max="10"
                       required
+                      title="ST depression induced by exercise relative to rest. Higher = more severe myocardial ischemia."
                     />
                   </div>
                 </div>
@@ -680,6 +781,7 @@ function App() {
                       onChange={handleInputChange}
                       className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                       required
+                      title="Slope of the ST segment: 0 = Upsloping, 1 = Flat, 2 = Downsloping."
                     >
                       <option value="">Select slope</option>
                       <option value="0">Upsloping</option>
@@ -698,6 +800,7 @@ function App() {
                       onChange={handleInputChange}
                       className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                       required
+                      title="Major vessels colored by fluoroscopy. 0–3 vessels. More vessels = higher risk."
                     >
                       <option value="">Select count</option>
                       <option value="0">0 vessels</option>
@@ -717,6 +820,7 @@ function App() {
                       onChange={handleInputChange}
                       className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                       required
+                      title="Type of Thalassemia: 1 = Normal, 2 = Fixed defect, 3 = Reversible defect."
                     >
                       <option value="">Select type</option>
                       <option value="1">Normal</option>
@@ -814,6 +918,9 @@ function App() {
                 <p className="text-sm mt-1 opacity-90">
                   {Math.round(prediction.probability * 100)}% Probability
                 </p>
+                <div className="mt-4 flex items-center justify-center">
+                  <RiskGauge score={prediction.probability} label="Your Risk Score" size={120} />
+                </div>
               </div>
 
               <div className="bg-gradient-to-r from-purple-500 to-purple-600 rounded-lg p-6 text-white text-center">
@@ -886,6 +993,13 @@ function App() {
               </div>
             )}
 
+            {/* Patient Data Comparison with Dataset Statistics */}
+            {showResults && prediction && datasetStats && (
+              <div className="mb-6">
+                <PatientDataComparison patientData={formData} datasetStats={datasetStats} />
+              </div>
+            )}
+
             {/* Enhanced Recommendations */}
             <div className="bg-gray-50 rounded-lg p-6 mb-6">
               <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
@@ -931,6 +1045,7 @@ function App() {
             </div>
 
             {/* Enhanced Model Information */}
+            <LifestyleTracker riskLevel={prediction.risk_level} />
             <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-6 mb-6 border border-blue-200">
               <h3 className="text-lg font-semibold text-blue-800 mb-4 flex items-center">
                 <Brain className="w-5 h-5 mr-2" />
@@ -993,11 +1108,25 @@ function App() {
                 View Model Comparison
               </button>
               <button
+                onClick={handlePdfDownload}
+                className="flex-1 bg-yellow-500 hover:bg-yellow-600 text-white font-semibold py-3 px-6 rounded-md transition duration-200 flex items-center justify-center"
+              >
+                <Heart className="w-5 h-5 mr-2" />
+                Download PDF Report
+              </button>
+              <button
                 onClick={() => window.print()}
                 className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-md transition duration-200 flex items-center justify-center"
               >
                 <Heart className="w-5 h-5 mr-2" />
                 Print Medical Report
+              </button>
+              <button
+                onClick={()=>setEmailModal(true)}
+                className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-6 rounded-md transition duration-200 flex items-center justify-center"
+              >
+                <Mail className="w-5 h-5 mr-2" />
+                Send Report by Email
               </button>
             </div>
 
@@ -1024,6 +1153,13 @@ function App() {
           </div>
         )}
       </div>
+      <EmailReportModal
+        open={emailModal}
+        onClose={()=>{ if(!emailSending) {setEmailModal(false);setEmailError('');} }}
+        onSend={handleSendEmail}
+        loading={emailSending}
+        error={emailError || (emailSent? 'Email sent! ✅':'')}
+      />
     </div>
   );
 }

@@ -113,6 +113,30 @@ heart-disease-predictor/
    - Clinical recommendations
    - Model performance metrics
 
+### Email Report (EmailJS)
+
+To enable sending reports via email from the frontend using EmailJS:
+
+1. Create an EmailJS account and set up:
+   - a Service (SMTP or Gmail connection)
+   - a Template with variables: `to_email`, `report_summary`, `patient_age`, `risk_percent`, `result`, `recommendations`
+   - get your Public Key
+
+2. Create a `frontend/.env` file with these Vite variables:
+   ```bash
+   VITE_EMAILJS_SERVICE_ID=your_service_id
+   VITE_EMAILJS_TEMPLATE_ID=your_template_id
+   VITE_EMAILJS_PUBLIC_KEY=your_public_key
+   ```
+
+3. Restart the dev server:
+   ```bash
+   cd frontend
+   npm run dev
+   ```
+
+4. After generating a prediction, click “Send Report by Email”, enter the recipient email, and send.
+
 ### Model Comparison
 - View performance comparison of all tested algorithms
 - See accuracy, precision, recall, and F1-scores
