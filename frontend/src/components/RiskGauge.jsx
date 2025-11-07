@@ -63,3 +63,4 @@ const RiskGauge = ({ score = 0, label = '', size = 160 }) => {
 export default RiskGauge;
 
 
+

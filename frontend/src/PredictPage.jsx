@@ -25,6 +25,7 @@ import PatientDataComparison from './components/PatientDataComparison';
 import "./App.css";
 import { jsPDF } from 'jspdf';
 import emailjs from 'emailjs-com';
+import Papa from 'papaparse';
 
 function App() {
   const [formData, setFormData] = useState({
@@ -294,6 +295,94 @@ function App() {
     setError(null);
   };
 
+  const handleCsvUpload = (file) => {
+    if (!file) return;
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        try {
+          const rows = results.data;
+          if (!rows || rows.length === 0) {
+            setError('CSV appears empty. Include a header row and at least one data row.');
+            return;
+          }
+          const row = rows[0];
+          const fieldNames = [
+            'age','sex','cp','trestbps','chol','fbs','restecg','thalach','exang','oldpeak','slope','ca','thal'
+          ];
+          const normalized = {};
+          // Basic header normalization: lowercase, trim
+          const normRow = {};
+          Object.keys(row).forEach(k => {
+            normRow[k.trim().toLowerCase()] = row[k];
+          });
+          // Allow a few common synonyms
+          const alias = {
+            'restingbp': 'trestbps',
+            'resting_bp': 'trestbps',
+            'cholesterol': 'chol',
+            'maxhr': 'thalach',
+            'max_heart_rate': 'thalach',
+          };
+          const convertValue = (field, val) => {
+            if (val === undefined || val === null || val === '') return undefined;
+            const raw = String(val).trim();
+            const num = Number(raw);
+            switch (field) {
+              case 'cp': {
+                if (!Number.isNaN(num)) {
+                  const mapped = Math.max(0, Math.min(3, Math.round(num) - 1));
+                  return String(mapped);
+                }
+                break;
+              }
+              case 'slope': {
+                if (!Number.isNaN(num)) {
+                  const mapped = Math.max(0, Math.min(2, Math.round(num) - 1));
+                  return String(mapped);
+                }
+                break;
+              }
+              case 'thal': {
+                if (!Number.isNaN(num)) {
+                  const map = { 3: '1', 6: '2', 7: '3', 1: '1', 2: '2' };
+                  if (map[num] !== undefined) return map[num];
+                }
+                break;
+              }
+              default:
+                if (!Number.isNaN(num)) return String(num);
+                return raw;
+            }
+            return raw;
+          };
+
+          fieldNames.forEach((f) => {
+            const key = f;
+            const aliasKey = Object.keys(alias).find(a => alias[a]===f);
+            const sourceVal = normRow[key] ?? (aliasKey ? normRow[aliasKey] : undefined);
+            const converted = convertValue(f, sourceVal);
+            if (converted !== undefined) {
+              normalized[f] = converted;
+            }
+          });
+          if (Object.keys(normalized).length === 0) {
+            setError('CSV headers must include at least some of: age, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal');
+            return;
+          }
+          setFormData((prev) => ({ ...prev, ...normalized }));
+          setError(null);
+        } catch (e) {
+          setError('Failed to parse CSV: ' + (e.message || 'Unknown error'));
+        }
+      },
+      error: (e) => {
+        setError('CSV parse error: ' + (e.message || 'Unknown error'));
+      }
+    });
+  };
+
   const handlePdfDownload = () => {
     if (!prediction) return;
     const doc = new jsPDF();
@@ -331,6 +420,105 @@ function App() {
   const EMAILJS_USER_ID = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
 
   const getSummaryText = () => `KB22 Heart Disease Report\n\nDate: ${new Date().toLocaleString()}\nPatient Age: ${formData.age}\nSex: ${formData.sex==='1'?'Male':'Female'}\nRisk Score: ${(prediction.probability*100).toFixed(1)}% [${prediction.risk_level}]\nResult: ${prediction.prediction===1? 'POSITIVE (Heart Disease Detected)':'NEGATIVE (No Heart Disease)'}\nModel Used: ${prediction.model}\nAccuracy: ${prediction.accuracy}\n\nRecommendations:\n${prediction.recommendation}`;
+
+  const generateHealthImprovements = () => {
+    if (!prediction) return [];
+
+    const tips = [];
+    const pushTip = (tip) => {
+      if (tip && !tips.includes(tip)) {
+        tips.push(tip);
+      }
+    };
+
+    const ageNum = Number(formData.age) || 0;
+    const bp = Number(formData.trestbps) || 0;
+    const chol = Number(formData.chol) || 0;
+    const fbs = Number(formData.fbs);
+    const thalach = Number(formData.thalach) || 0;
+    const exang = Number(formData.exang);
+    const oldpeak = Number(formData.oldpeak) || 0;
+    const slope = Number(formData.slope);
+    const ca = Number(formData.ca);
+    const thal = Number(formData.thal);
+    const cp = Number(formData.cp);
+    const riskLevel = (prediction.risk_level || '').toLowerCase();
+    const riskProbability = prediction.probability || 0;
+
+    // Baseline actions based on model output
+    if (prediction.prediction === 1 || riskLevel.includes('high')) {
+      pushTip('Book a consultation with a cardiologist within the next 1–2 weeks to review these findings and plan further testing.');
+      pushTip('Begin medically supervised activity such as short, low-intensity walks; avoid overexertion until cleared.');
+      pushTip('Adopt a DASH or Mediterranean-style eating pattern emphasizing vegetables, legumes, whole grains, lean proteins, and limiting trans/saturated fats.');
+    } else {
+      pushTip('Continue heart-healthy habits: at least 150 minutes/week of moderate aerobic exercise plus two strength sessions.');
+      pushTip('Keep a balanced eating pattern rich in fiber (25–30g/day) and low in ultra-processed foods and added sugars.');
+      pushTip('Maintain stress-reduction routines (mindfulness, deep breathing, yoga) and target 7–8 hours of quality sleep.');
+    }
+
+    if (riskProbability >= 0.75) {
+      pushTip('Discuss advanced diagnostics (stress test, echocardiogram, or coronary CT) with your cardiologist given the elevated predicted risk.');
+      pushTip('Review current medications with your physician; aggressive risk-factor management may be indicated.');
+    } else if (riskProbability >= 0.55) {
+      pushTip('Track blood pressure, resting heart rate, and symptoms weekly; share the log at your next clinical visit.');
+    }
+
+    // Blood pressure and cholesterol
+    if (bp >= 130) {
+      pushTip('Limit sodium to <1500 mg/day by cooking at home, reading labels, and avoiding cured/processed foods.');
+      pushTip('Measure blood pressure at home 4–5 times per week (morning/evening) and bring readings to your clinician.');
+    }
+    if (chol >= 240) {
+      pushTip('Reduce saturated fat intake (fatty meats, full-fat dairy) and include plant-based omega-3 sources (walnuts, flax, chia).');
+      pushTip('Add soluble fiber (oats, barley, beans) daily to lower LDL cholesterol; consider discussing statin therapy.');
+    }
+
+    // Glucose handling
+    if (fbs === 1) {
+      pushTip('Moderate refined carbohydrate intake; emphasize protein and fiber in each meal to stabilize blood glucose.');
+      pushTip('Schedule fasting glucose or HbA1c monitoring; coordinate with your primary care provider/endocrinologist.');
+    }
+
+    // Symptom-oriented suggestions
+    if (cp === 2 || cp === 3) { // non-anginal / asymptomatic in UI scale
+      pushTip('Even with minimal chest pain, report any new pressure, heaviness, or shortness of breath to your doctor immediately.');
+    } else if (cp === 0 || cp === 1) {
+      pushTip('Document triggers, duration, and intensity of chest discomfort; share this log during appointments.');
+    }
+
+    if (exang === 1) {
+      pushTip('Avoid vigorous unmonitored exercise. Ask about enrolling in a cardiac rehabilitation or supervised exercise program.');
+    }
+    if (oldpeak >= 2) {
+      pushTip('Elevated ST depression warrants timely review—seek medical attention if exercise causes chest pain or dizziness.');
+      pushTip('Focus on low-impact activities such as stationary cycling or aquatic exercise until cleared for higher intensity.');
+    }
+    if (thalach && thalach < 100) {
+      pushTip('Gradually build aerobic capacity: start with 10-minute walks 3x/day, increasing total duration by 5 minutes each week.');
+    }
+
+    // Anatomic markers
+    if (ca >= 1) {
+      pushTip('Coronary vessel involvement suggests a need for aggressive risk-factor control; adhere strictly to medication plans.');
+    }
+    if (thal === 2 || thal === 3) {
+      pushTip('Abnormal thallium imaging results—ensure follow-up testing is completed and review results with a cardiologist.');
+    }
+
+    if (slope === 1 || slope === 2) {
+      pushTip('Discuss exercise stress-test findings with your doctor; altered ST slope may indicate ischemia needing targeted therapy.');
+    }
+
+    if (ageNum >= 60) {
+      pushTip('Incorporate balance and strength exercises (chair stands, heel-to-toe walking) to improve cardiovascular and functional health.');
+    }
+
+    // Lifestyle reinforcement
+    pushTip('Stay hydrated and limit alcohol consumption (≤1 drink/day for women, ≤2 for men).');
+    pushTip('Schedule routine follow-ups every 3–6 months to reassess risk factors, labs, and medication effectiveness.');
+
+    return tips.slice(0, 12);
+  };
 
   const handleSendEmail = async (recipient) => {
     setEmailError(''); setEmailSending(true);
@@ -563,6 +751,21 @@ function App() {
           /* Input Form */
           <div className="bg-white rounded-lg shadow-lg p-6 animate-fadeInUp">
             <div className="space-y-6">
+              {/* CSV Uploader */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <label className="block text-sm font-medium text-blue-900 mb-2">Load from CSV</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(e)=> handleCsvUpload(e.target.files && e.target.files[0])}
+                    className="block w-full text-sm text-blue-900 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700"
+                  />
+                </div>
+                <p className="text-xs text-blue-700 mt-2">
+                  Expected headers: age, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal. Only the first row will be used.
+                </p>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {/* Demographics Section */}
                 <div className="space-y-4">
@@ -1000,48 +1203,19 @@ function App() {
               </div>
             )}
 
-            {/* Enhanced Recommendations */}
-            <div className="bg-gray-50 rounded-lg p-6 mb-6">
-              <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+
+            {/* Personalized Health Improvements */}
+            <div className="bg-white rounded-lg p-6 mb-6 shadow-sm border border-gray-100">
+              <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center">
                 <Heart className="w-5 h-5 mr-2 text-red-500" />
-                Clinical Recommendations
+                Personalized Health Improvements
               </h3>
-              <div className="bg-white p-4 rounded-lg border-l-4 border-blue-500 mb-4">
-                <p className="text-gray-700 font-medium mb-2">AI-Generated Recommendation:</p>
-                <p className="text-gray-600">{prediction.recommendation}</p>
-              </div>
-              
-              {prediction.prediction === 1 ? (
-                <div className="bg-red-50 p-4 rounded-lg border border-red-200">
-                  <p className="mb-3 font-semibold text-red-800 flex items-center">
-                    <AlertTriangle className="w-5 h-5 mr-2" />
-                    HIGH RISK - Immediate Medical Attention Required
-                  </p>
-                  <div className="space-y-2 text-red-700 text-sm">
-                    <p>• Schedule immediate consultation with a cardiologist</p>
-                    <p>• Consider additional cardiac testing (ECG, stress test, echocardiogram)</p>
-                    <p>• Begin lifestyle modifications immediately</p>
-                    <p>• Monitor blood pressure and cholesterol closely</p>
-                    <p>• Discuss medication options with healthcare provider</p>
-                    <p>• Consider cardiac rehabilitation programs</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                  <p className="mb-3 font-semibold text-green-800 flex items-center">
-                    <CheckCircle className="w-5 h-5 mr-2" />
-                    LOW RISK - Continue Preventive Care
-                  </p>
-                  <div className="space-y-2 text-green-700 text-sm">
-                    <p>• Maintain current healthy lifestyle practices</p>
-                    <p>• Continue regular cardiovascular health screenings</p>
-                    <p>• Keep up with balanced diet and regular exercise</p>
-                    <p>• Monitor risk factors periodically</p>
-                    <p>• Follow up with healthcare provider as scheduled</p>
-                    <p>• Consider annual cardiac risk assessments</p>
-                  </div>
-                </div>
-              )}
+              <p className="text-sm text-gray-600 mb-3">Based on your inputs and risk profile, consider the following actions:</p>
+              <ul className="list-disc pl-5 space-y-2 text-gray-700">
+                {generateHealthImprovements().map((tip, idx) => (
+                  <li key={idx}>{tip}</li>
+                ))}
+              </ul>
             </div>
 
             {/* Enhanced Model Information */}
